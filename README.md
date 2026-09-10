@@ -273,15 +273,3 @@ https://github.com/deaminaa
 This project is licensed under the MIT License.
 
 
-### One thing I'd change before you commit
-
-Your repository URL in the screenshot is:
-
-```text
-github.com/deaminaa/irrigation-need-prediction-using-fastapi
-
-so I deliberately used that exact URL in the README.
-
-Also, I would not add fake accuracy numbers, Kaggle rankings, deployment claims, or business impact to this README unless we have the actual evidence in the project. The current version sells the engineering work—which is genuinely strong—without overstating anything.
-
-Paste this into README.md, then don't commit it yet. Send me a screenshot of the README editor and I'll quickly check the formatting before you hit commit.
