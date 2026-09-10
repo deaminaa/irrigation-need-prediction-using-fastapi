@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+streamlit
+requests
+pandas
+numpy
+lightgbm
+pydantic
+scikit-learn
