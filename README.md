@@ -33,14 +33,15 @@ The final system provides predictions through an interactive web interface and a
 
 The final model is a **LightGBM multiclass classifier** trained to predict three irrigation-need classes:
 
-```text
+
 Low
 Medium
 High
 
 The saved model artifact contains the trained model together with the feature configuration required for inference.
 
-Feature Engineering
+
+#### Feature Engineering
 
 The prediction pipeline uses both raw agricultural features and engineered features, including:
 
@@ -59,8 +60,7 @@ Moisture × crop growth stage
 Crop × growth-stage combination
 Humidity × temperature interaction
 Rainfall × soil-moisture interaction
-
-The API recreates these transformations during inference so that predictions use the same feature structure as the trained model.
+ The API recreates these transformations during inference so that predictions use the same feature structure as the trained model.
 🏗️ System Architecture
                    User
                      │
