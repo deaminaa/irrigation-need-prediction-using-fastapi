@@ -154,3 +154,134 @@ streamlit run irrigation.py
 The application will normally be available at:
 
 http://localhost:8501
+🐳 Run with Docker
+
+The application is packaged as a single Docker image containing both the FastAPI backend and Streamlit frontend.
+
+Pull the image
+docker pull mueezuddin/irrigation-predictor:latest
+Run the container
+docker run --name irrigation-app \
+  -p 8501:8501 \
+  -p 8000:8000 \
+  mueezuddin/irrigation-predictor:latest
+
+Then open:
+
+http://localhost:8501
+
+FastAPI documentation:
+
+http://localhost:8000/docs
+🔌 API
+GET /
+
+Basic application status endpoint.
+
+GET /health
+
+Health-check endpoint confirming that the API and model are loaded.
+
+POST /predict
+
+Accepts field and crop information and returns the predicted irrigation requirement together with class probabilities.
+
+Example request:
+
+{
+  "Soil_Type": "Sandy",
+  "Soil_pH": 6.5,
+  "Soil_Moisture": 35,
+  "Electrical_Conductivity": 0.8,
+  "Temperature_C": 28,
+  "Humidity": 60,
+  "Rainfall_mm": 5,
+  "Wind_Speed_kmh": 12,
+  "Crop_Type": "Wheat",
+  "Crop_Growth_Stage": "Vegetative",
+  "Season": "Rabi",
+  "Irrigation_Type": "Drip",
+  "Water_Source": "Groundwater",
+  "Mulching_Used": "Yes",
+  "Previous_Irrigation_mm": 10
+}
+
+Example response structure:
+
+{
+  "prediction": "Low",
+  "class_id": 0,
+  "probabilities": {
+    "Low": 0.97,
+    "Medium": 0.03,
+    "High": 0.00
+  }
+}
+📊 Model Output
+
+The application returns:
+
+Predicted irrigation requirement
+Numeric class ID
+Probability for each irrigation class
+
+This makes the system useful not only for classification but also for understanding model confidence.
+
+🎯 Key Engineering Highlights
+
+This project demonstrates an end-to-end ML deployment workflow rather than only model training:
+
+Multiclass machine learning with LightGBM
+Reusable feature-engineering pipeline
+Model serialization and inference
+REST API development with FastAPI
+Interactive ML application with Streamlit
+Input validation using Pydantic
+Dockerized deployment
+Single-container application architecture
+API documentation through Swagger/OpenAPI
+Reproducible deployment through Docker Hub
+📦 Docker Image
+
+Docker image:
+
+mueezuddin/irrigation-predictor:latest
+
+Docker Hub:
+
+https://hub.docker.com/r/mueezuddin/irrigation-predictor
+
+🔮 Future Improvements
+
+Possible future extensions include:
+
+Deploying the container to AWS
+Adding model monitoring and logging
+Automated CI/CD with GitHub Actions
+Adding prediction history and analytics
+Improving model interpretability with SHAP
+Adding authentication and production API security
+👨‍💻 Author
+
+Mueezuddin Ahmed
+
+GitHub:
+https://github.com/deaminaa
+
+📄 License
+
+This project is licensed under the MIT License.
+
+
+### One thing I'd change before you commit
+
+Your repository URL in the screenshot is:
+
+```text
+github.com/deaminaa/irrigation-need-prediction-using-fastapi
+
+so I deliberately used that exact URL in the README.
+
+Also, I would not add fake accuracy numbers, Kaggle rankings, deployment claims, or business impact to this README unless we have the actual evidence in the project. The current version sells the engineering work—which is genuinely strong—without overstating anything.
+
+Paste this into README.md, then don't commit it yet. Send me a screenshot of the README editor and I'll quickly check the formatting before you hit commit.
