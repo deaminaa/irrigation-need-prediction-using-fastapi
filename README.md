@@ -85,3 +85,72 @@ The API recreates these transformations during inference so that predictions use
 The entire application can run inside a single Docker container.
 
 🛠️ Tech Stack
+| Component        | Technology    |
+| ---------------- | ------------- |
+| Language         | Python        |
+| Machine Learning | LightGBM      |
+| Data Processing  | Pandas, NumPy |
+| API              | FastAPI       |
+| Validation       | Pydantic      |
+| Frontend         | Streamlit     |
+| Containerization | Docker        |
+| Server           | Uvicorn       |
+| Version Control  | Git / GitHub  |
+
+📁 Project Structure
+.
+├── main.py
+├── irrigation.py
+├── irrigation_model.pkl
+├── requirements.txt
+├── Dockerfile
+├── start.sh
+└── .dockerignore
+File Description
+
+main.py
+FastAPI backend responsible for loading the trained model, preparing inference features, and returning predictions.
+
+irrigation.py
+Streamlit frontend providing an interactive interface for entering field and crop conditions.
+
+irrigation_model.pkl
+Serialized LightGBM model artifact and associated inference metadata.
+
+requirements.txt
+Python dependencies required to run the application.
+
+Dockerfile
+Build instructions for packaging the complete application into a Docker image.
+
+start.sh
+Starts both FastAPI and Streamlit inside the container.
+
+.dockerignore
+Prevents unnecessary datasets, notebooks, environments, and temporary files from being included in the Docker build context.
+
+💻 Running Locally
+1. Clone the repository
+git clone https://github.com/deaminaa/irrigation-need-prediction-using-fastapi.git
+cd irrigation-need-prediction-using-fastapi
+2. Install dependencies
+pip install -r requirements.txt
+3. Start the FastAPI backend
+uvicorn main:app --reload
+
+The API will be available at:
+
+http://127.0.0.1:8000
+
+Interactive API documentation:
+
+http://127.0.0.1:8000/docs
+4. Start the Streamlit frontend
+
+In another terminal:
+
+streamlit run irrigation.py
+
+The application will normally be available at:
+
+http://localhost:8501
