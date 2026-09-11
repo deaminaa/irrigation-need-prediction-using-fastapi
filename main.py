@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ============================================================
@@ -31,8 +31,134 @@ except Exception as exc:
 model = artifact["model"]
 FEATURE_COLUMNS = artifact["feature_columns"]
 CATEGORICAL_FEATURES = artifact["categorical_features"]
-THRESHOLDS = artifact["thresholds"]
 CLASSES = artifact["classes"]
+
+
+# ============================================================
+# 2a. VALIDATE ARTIFACT ASSUMPTIONS AT STARTUP
+#
+# Everything below is checked once, at import, so that a
+# retrained or repacked artifact fails loudly here instead of
+# producing plausible-looking but wrong predictions later.
+# ============================================================
+
+# The artifact records class ids (0/1/2) and never their names, so this list is
+# the only surviving record of what each id means. Refuse to run if the ids stop
+# matching it, otherwise every response would be mislabelled in silence.
+CLASS_LABELS = ["Low", "Medium", "High"]
+
+artifact_class_ids = [int(c) for c in CLASSES]
+model_class_ids = [int(c) for c in model.classes_]
+
+if artifact_class_ids != list(range(len(CLASS_LABELS))):
+    raise RuntimeError(
+        f"Artifact class ids {artifact_class_ids} do not match the label "
+        f"order {CLASS_LABELS}; predictions would be mislabelled."
+    )
+
+if model_class_ids != artifact_class_ids:
+    raise RuntimeError(
+        f"Model classes_ {model_class_ids} disagree with artifact classes "
+        f"{artifact_class_ids}."
+    )
+
+# The previous implementation rescaled probabilities by threshold / 0.5. At the
+# stored 0.5 / 0.5 that is arithmetically a no-op, and at any other value it is
+# not a decision rule either. It was removed rather than left as dead code, so
+# refuse to start if the artifact ever carries real thresholds — silently
+# ignoring them would be worse than not supporting them.
+THRESHOLDS = artifact["thresholds"]
+
+active_thresholds = {
+    name: value
+    for name, value in THRESHOLDS.items()
+    if float(value) != 0.5
+}
+
+if active_thresholds:
+    raise RuntimeError(
+        f"Artifact carries non-default thresholds {active_thresholds} but no "
+        "thresholding is implemented; predictions would ignore them."
+    )
+
+# LightGBM keeps the training categories inside the Booster, ordered to match
+# CATEGORICAL_FEATURES. They are the only authoritative record of what the model
+# will accept. Encoding against anything else silently produces wrong codes, so
+# there is no fallback path here on purpose.
+pandas_categorical = getattr(model.booster_, "pandas_categorical", None)
+
+if not pandas_categorical:
+    raise RuntimeError(
+        "Booster is missing pandas_categorical; categorical inputs cannot be "
+        "encoded to match training."
+    )
+
+# zip() would quietly truncate to the shorter of the two and leave some columns
+# unencoded, so insist the pairing is exact.
+if len(pandas_categorical) != len(CATEGORICAL_FEATURES):
+    raise RuntimeError(
+        f"Booster carries {len(pandas_categorical)} categorical category lists "
+        f"but the artifact names {len(CATEGORICAL_FEATURES)} categorical "
+        f"features; the two cannot be paired reliably."
+    )
+
+TRAINING_CATEGORIES = {
+    column: list(categories)
+    for column, categories in zip(CATEGORICAL_FEATURES, pandas_categorical)
+}
+
+# Crop_Stage_Combo is derived during feature engineering; the rest arrive in the
+# request and are validated against these lists.
+REQUEST_CATEGORICALS = [
+    column
+    for column in TRAINING_CATEGORIES
+    if column != "Crop_Stage_Combo"
+]
+
+SOIL_CAPACITY = {
+    "Sandy": 0.5,
+    "Loamy": 1.0,
+    "Silt": 1.2,
+    "Clay": 1.5,
+}
+
+STAGE_ORDER = {
+    "Sowing": 0,
+    "Vegetative": 1,
+    "Flowering": 2,
+    "Harvest": 3,
+}
+
+# A category the model knows but these tables do not would map to NaN and still
+# yield a confident prediction, so check the coverage up front.
+for column, lookup in (
+    ("Soil_Type", SOIL_CAPACITY),
+    ("Crop_Growth_Stage", STAGE_ORDER),
+):
+    unmapped = set(TRAINING_CATEGORIES[column]) - set(lookup)
+
+    if unmapped:
+        raise RuntimeError(
+            f"{column} categories {sorted(unmapped)} have no feature-"
+            f"engineering entry; they would silently become NaN."
+        )
+
+# Crop_Stage_Combo is derived from two validated inputs, so every crop x stage
+# pairing has to exist in training or the derived value becomes NaN for an
+# otherwise perfectly valid request.
+expected_combos = {
+    f"{crop}_{stage}"
+    for crop in TRAINING_CATEGORIES["Crop_Type"]
+    for stage in TRAINING_CATEGORIES["Crop_Growth_Stage"]
+}
+
+missing_combos = expected_combos - set(TRAINING_CATEGORIES["Crop_Stage_Combo"])
+
+if missing_combos:
+    raise RuntimeError(
+        f"Crop_Stage_Combo is missing {sorted(missing_combos)}; those "
+        f"combinations would silently become NaN."
+    )
 
 
 # ============================================================
@@ -70,6 +196,37 @@ class IrrigationInput(BaseModel):
     Mulching_Used: str = Field(..., examples=["Yes"])
 
     Previous_Irrigation_mm: float = Field(..., examples=[50.0])
+
+    @model_validator(mode="after")
+    def reject_untrained_categories(self):
+        """
+        An unrecognised category becomes NaN once encoded, which LightGBM reads
+        as a missing value and still scores confidently. Reject it at the trust
+        boundary so the caller gets a 422 instead of a plausible answer.
+        """
+
+        for column in REQUEST_CATEGORICALS:
+            value = getattr(self, column)
+            allowed = TRAINING_CATEGORIES[column]
+
+            if value not in allowed:
+                raise ValueError(
+                    f"{column}={value!r} is not a category the model was "
+                    f"trained on. Valid values: {allowed}"
+                )
+
+        return self
+
+
+unknown_categoricals = (
+    set(REQUEST_CATEGORICALS) - set(IrrigationInput.model_fields)
+)
+
+if unknown_categoricals:
+    raise RuntimeError(
+        f"Categorical features {sorted(unknown_categoricals)} are not request "
+        f"fields, so they would never be validated."
+    )
 
 
 # ============================================================
@@ -113,14 +270,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         * (1 + df["Soil_Moisture"] / 100)
     )
 
-    soil_capacity = {
-        "Sandy": 0.5,
-        "Loamy": 1.0,
-        "Silt": 1.2,
-        "Clay": 1.5,
-    }
-
-    df["Soil_Capacity"] = df["Soil_Type"].map(soil_capacity)
+    df["Soil_Capacity"] = df["Soil_Type"].map(SOIL_CAPACITY)
 
     df["Moisture_vs_Capacity"] = (
         df["Soil_Moisture"]
@@ -146,15 +296,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         * (1 - df["Humidity"] / 100)
     )
 
-    stage_order = {
-        "Sowing": 0,
-        "Vegetative": 1,
-        "Flowering": 2,
-        "Harvest": 3,
-    }
-
     df["Stage_Ordinal"] = (
-        df["Crop_Growth_Stage"].map(stage_order)
+        df["Crop_Growth_Stage"].map(STAGE_ORDER)
     )
 
     df["Moisture_x_Stage"] = (
@@ -213,37 +356,18 @@ def prepare_features(data: IrrigationInput) -> pd.DataFrame:
     df = df[FEATURE_COLUMNS].copy()
 
     # --------------------------------------------------------
-    # Restore categorical dtype.
-    #
-    # LightGBM stores the training categorical metadata inside
-    # the underlying Booster. We use it when available.
+    # Restore the categorical dtype exactly as it was during
+    # training. Both the category lists and the request values
+    # were validated at import and by the schema, so nothing
+    # reaching this point can fall outside its category list.
     # --------------------------------------------------------
 
-    booster = model.booster_
-
-    pandas_categorical = getattr(
-        booster,
-        "pandas_categorical",
-        None,
-    )
-
-    if pandas_categorical is not None:
-        # Categorical columns are stored in the same order
-        # as the categorical features used during training.
-        for col, categories in zip(
-            CATEGORICAL_FEATURES,
-            pandas_categorical,
-        ):
-            if col in df.columns:
-                df[col] = pd.Categorical(
-                    df[col],
-                    categories=categories,
-                )
-    else:
-        # Fallback
-        for col in CATEGORICAL_FEATURES:
-            if col in df.columns:
-                df[col] = df[col].astype("category")
+    for column, categories in TRAINING_CATEGORIES.items():
+        if column in df.columns:
+            df[column] = pd.Categorical(
+                df[column],
+                categories=categories,
+            )
 
     return df
 
@@ -257,7 +381,7 @@ def root():
     return {
         "message": "Irrigation Need Prediction API is running",
         "model": "LightGBM",
-        "classes": ["Low", "Medium", "High"],
+        "classes": CLASS_LABELS,
     }
 
 
@@ -266,6 +390,21 @@ def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
+    }
+
+
+@app.get("/categories")
+def categories():
+    """
+    Valid values for every categorical input, read off the model itself.
+
+    The UI builds its dropdowns from this response so the two cannot drift
+    apart as the model is retrained.
+    """
+
+    return {
+        column: TRAINING_CATEGORIES[column]
+        for column in REQUEST_CATEGORICALS
     }
 
 
@@ -283,65 +422,14 @@ def predict(data: IrrigationInput):
         # Probability prediction
         probabilities = model.predict_proba(X)[0]
 
-        # ----------------------------------------------------
-        # Apply stored thresholds
-        # ----------------------------------------------------
-
-        adjusted_probabilities = probabilities.copy()
-
-        # Your actual artifact currently stores 0.5 / 0.5
-        high_threshold = float(
-            THRESHOLDS.get("high", 0.5)
-        )
-
-        medium_threshold = float(
-            THRESHOLDS.get("medium", 0.5)
-        )
-
-        adjusted_probabilities[2] *= (
-            high_threshold / 0.5
-        )
-
-        adjusted_probabilities[1] *= (
-            medium_threshold / 0.5
-        )
-
-        adjusted_probabilities = (
-            adjusted_probabilities
-            / adjusted_probabilities.sum()
-        )
-
-        predicted_class = int(
-            np.argmax(adjusted_probabilities)
-        )
-
-        label_map = {
-            0: "Low",
-            1: "Medium",
-            2: "High",
-        }
-
-        prediction = label_map.get(
-            predicted_class,
-            str(predicted_class),
-        )
+        predicted_class = int(np.argmax(probabilities))
 
         return {
-            "prediction": prediction,
+            "prediction": CLASS_LABELS[predicted_class],
             "class_id": predicted_class,
             "probabilities": {
-                "Low": round(
-                    float(adjusted_probabilities[0]),
-                    6,
-                ),
-                "Medium": round(
-                    float(adjusted_probabilities[1]),
-                    6,
-                ),
-                "High": round(
-                    float(adjusted_probabilities[2]),
-                    6,
-                ),
+                label: round(float(probabilities[index]), 6)
+                for index, label in enumerate(CLASS_LABELS)
             },
         }
 

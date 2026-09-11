@@ -1,3 +1,5 @@
+import time
+
 import requests
 import streamlit as st
 
@@ -59,7 +61,35 @@ st.markdown(
 # CONFIG
 # ============================================================
 
-API_URL = "http://127.0.0.1:8000/predict"
+API_BASE = "http://127.0.0.1:8000"
+
+
+@st.cache_data(show_spinner="Loading options from the model...")
+def fetch_categories() -> dict:
+    """
+    Valid categorical values, read from the model through the API.
+
+    Hardcoding these here would let the dropdowns drift away from what the
+    model was actually trained on. Streamlit also starts serving before Uvicorn
+    has finished loading the model, so retry briefly rather than failing the
+    first render.
+    """
+
+    last_error = None
+
+    for _ in range(15):
+        try:
+            response = requests.get(f"{API_BASE}/categories", timeout=5)
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            time.sleep(1)
+
+    raise RuntimeError(
+        f"Could not reach the prediction API at {API_BASE}: {last_error}"
+    )
 
 
 # ============================================================
@@ -83,6 +113,18 @@ st.markdown(
 
 
 # ============================================================
+# OPTIONS
+# ============================================================
+
+try:
+    CATEGORIES = fetch_categories()
+
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.stop()
+
+
+# ============================================================
 # INPUTS
 # ============================================================
 
@@ -93,7 +135,7 @@ col1, col2 = st.columns(2)
 with col1:
     soil_type = st.selectbox(
         "Soil Type",
-        ["Sandy", "Loamy", "Silt", "Clay"],
+        CATEGORIES["Soil_Type"],
     )
 
     soil_ph = st.number_input(
@@ -156,41 +198,23 @@ col1, col2 = st.columns(2)
 with col1:
     crop_type = st.selectbox(
         "Crop Type",
-        [
-            "Wheat",
-            "Rice",
-            "Maize",
-            "Cotton",
-            "Sugarcane",
-        ],
+        CATEGORIES["Crop_Type"],
     )
 
     growth_stage = st.selectbox(
         "Crop Growth Stage",
-        [
-            "Sowing",
-            "Vegetative",
-            "Flowering",
-            "Harvest",
-        ],
+        CATEGORIES["Crop_Growth_Stage"],
     )
 
 with col2:
     season = st.selectbox(
         "Season",
-        [
-            "Kharif",
-            "Rabi",
-            "Zaid",
-        ],
+        CATEGORIES["Season"],
     )
 
     mulching = st.selectbox(
         "Mulching Used",
-        [
-            "Yes",
-            "No",
-        ],
+        CATEGORIES["Mulching_Used"],
     )
 
 
@@ -201,22 +225,12 @@ col1, col2 = st.columns(2)
 with col1:
     irrigation_type = st.selectbox(
         "Irrigation Type",
-        [
-            "Canal",
-            "Sprinkler",
-            "Rainfed",
-            "Drip",
-        ],
+        CATEGORIES["Irrigation_Type"],
     )
 
     water_source = st.selectbox(
         "Water Source",
-        [
-            "Reservoir",
-            "River",
-            "Groundwater",
-            "Rainwater",
-        ],
+        CATEGORIES["Water_Source"],
     )
 
 with col2:
@@ -265,7 +279,7 @@ if predict_button:
 
         try:
             response = requests.post(
-                API_URL,
+                f"{API_BASE}/predict",
                 json=payload,
                 timeout=10,
             )
@@ -340,9 +354,14 @@ if predict_button:
             )
 
         except requests.exceptions.HTTPError as exc:
-            st.error(
-                f"API returned an error: {exc}"
-            )
+            # A 422 carries the rejected field and its valid values, which is
+            # far more useful to surface than the bare status line.
+            try:
+                detail = exc.response.json()["detail"]
+            except (ValueError, KeyError, TypeError):
+                detail = str(exc)
+
+            st.error(f"API rejected the request: {detail}")
 
         except Exception as exc:
             st.error(
