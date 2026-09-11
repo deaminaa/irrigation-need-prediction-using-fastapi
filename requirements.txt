@@ -1,9 +1,14 @@
-fastapi
-uvicorn[standard]
-streamlit
-requests
-pandas
-numpy
-lightgbm
-pydantic
-scikit-learn
+# Pinned so the image is reproducible and, critically, so the pickled model is
+# always loaded by the library versions it was serialised with.
+# scikit-learn is pinned to 1.8.0 because that is the version recorded inside
+# irrigation_model.pkl; anything else makes scikit-learn warn that results may
+# be invalid.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+streamlit==1.63.0
+requests==2.34.2
+pandas==3.0.5
+numpy==2.4.6
+lightgbm==4.7.0
+pydantic==2.13.5
+scikit-learn==1.8.0
